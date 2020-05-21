@@ -54,6 +54,123 @@ class App extends Component {
 
   }
 
+  //Метод для получения медиа от пользователя
+  getLocalStream = () => {
+
+
+    const success = (stream) => {
+      window.localStream = stream
+      this.setState({
+        localStream: stream //Записываем стрим в стейт для дальнейшего переиспользования
+      })
+
+      this.whoisOnline(); //Узнаём о текущих соединениях
+    }
+
+    //Отлавливаем ошибку
+    const failure = (e) => {
+      console.log('getUserMedia Error: ', e)
+    }
+
+    navigator.mediaDevices.getUserMedia(this.state.constraints) //Получаем медиа
+      .then(success)
+      .catch(failure)  
+  }
+
+  whoisOnline = () => { //Функция которая позволяет узнать пользователю о текущих соединениях, и сформировать для них офферы
+    this.sendToPeer("önlinePeers", null, {local: this.socket.id} )
+  }
+
+  sendToPeer = (messageType, payload, socketID) => { //Метод для работы с сокетом
+    this.socket.emit(messageType, {
+      socketID,
+      payload
+    })
+  }
+  
+  //Функция для создания нового соединения
+  createPeerConnection = (socketID, callback) => {
+    try {
+
+      let pc = new RTCPeerConnection(this.state.pc_config) 
+
+      //socketID используется для дальнейшего взаимодействия с пиром, и идентификации его в массиве подключений
+      const peerConnections = {...this.state.peerConnections, [socketID]: pc }
+      this.setState({
+        peerConnections //Сохраняем подключение в списке
+      })
+
+
+      //При нахождении кандидата мы будем пересылать его соотвествующему клиенту
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          this.sendToPeer("candidate", e.candidate, {
+            local: this.socket.id, //Для этого мы идентифицируем на сервере своё соединение
+            remote: socketID  //И с помощью полученного socketID идентифицируем клиента, которому необходимо переправить кандидата
+          })
+        }
+      };
+
+/* 
+      //Удаляем из списка стримов отключившиегося пира
+      pc.oniceconnectionstatechange = (e) => {
+        if(pc.iceConnectionState === "disconnected") {
+          const remoteStreams = this.state.remoteStreams.filter(stream => stream.id !== socketID)
+
+          this.setState({
+            remoteStream: remoteStreams.length > 0 && remoteStreams[0].stream || null,
+          })
+        }
+      } */
+
+
+      //При появлении в пире стрима - добавляем стрим в список стримов, для последующего отображения
+      pc.ontrack = (e) => {
+        const remoteVideo = { //Получаем экземпляр стрима
+          id: socketID, //Информация для идентификации стрима 
+          name: socketID,
+          stream: e.streams[0]
+        }
+
+        this.setState(prevState => {
+
+          //В случае если до получения стрима в комнате не было трансляций - мы получаем эту трансляцию на весь экран
+          //Если же в комнате уже есть трансляции - всё остается прежним
+          const remoteStream = prevState.remoteStreams.length > 0 ? {} : { remoteStream: e.streams[0] };
+
+          //Получаем выбранное на данный момент видео
+          let selectedVideo = prevState.remoteStreams.filter(stream => stream.id === prevState.selectedVideo.id);
+
+
+          //Если видео всё ещё имеется - ничего не происходит
+          //В ином случае отображаем на весь экран полученный стрим
+          selectedVideo = selectedVideo.length ? {} : { selectedVideo: remoteVideo};
+
+          return {
+            ...selectedVideo, //Обновляем выбранное видео, если логика выше его получила
+            ...remoteStream,  //Так-же обновляем стрим, он передаётся в компонент который отображает видео на весь экран
+            remoteStreams: [...prevState.remoteStreams, remoteVideo] //Обновляем список стримов, добавляя в него полученный экземпляр
+          };
+        });
+      };
+
+      pc.close = () => {
+
+      }
+
+      if (this.state.localStream)
+      pc.addStream(this.state.localStream) //Добавляем свой в пир свой стрим
+
+      callback(pc) //Возвращаем pc для взаимодействия
+
+    } catch(e) { //Отлавливаем ошибку
+      console.log("Something went wrong! Pc not created", e)
+      callback(null);
+    }
+  }
+  
+
+
   componentDidMount = () => {
 
 
@@ -165,7 +282,7 @@ class App extends Component {
         pc.addStream(this.state.localStream) //Добавляем в соединение наш локальный стрим
 
         pc.setRemoteDescription( new RTCSessionDescription(data.sdp) ) //Устанавливаем удалённое описание, с помощью полученного оффера
-          .then(() =>{
+          .then(() => { 
             pc.createAnswer(this.state.sdpConstraints) //Затем создаём ответ
               .then(sdp => {
                 pc.setLocalDescription(sdp) //И устанавливаем локальное описание
@@ -176,7 +293,7 @@ class App extends Component {
                 });
   
               });
-        });
+         });
       })
     });
 
@@ -189,122 +306,6 @@ class App extends Component {
     });
 
   };
-
-  //Мето для получения медиа от пользователя
-  getLocalStream = () => {
-
-
-    const success = (stream) => {
-      window.localStream = stream
-      this.setState({
-        localStream: stream //Записываем стрим в стейт для дальнейшего переиспользования
-      })
-
-      this.whoisOnline(); //Узнаём о текущих соединениях
-    }
-
-    //Отлавливаем ошибку
-    const failure = (e) => {
-      console.log('getUserMedia Error: ', e)
-    }
-
-    navigator.mediaDevices.getUserMedia(this.state.constraints) //Получаем медиа
-      .then(success)
-      .catch(failure)  
-  }
-
-  whoisOnline = () => { //Функция которая позволяет узнать пользователю о текущих соединениях, и сформировать для них офферы
-    this.sendToPeer("önlinePeers", null, {local: this.socket.id} )
-  }
-
-  sendToPeer = (messageType, payload, socketID) => { //Метод для работы с сокетом
-    this.socket.emit(messageType, {
-      socketID,
-      payload
-    })
-  }
-
-  //Функция для создания нового соединения
-
-  createPeerConnection = (socketID, callback) => {
-    try {
-
-      let pc = new RTCPeerConnection(this.state.pc_config) 
-
-      //socketID используется для дальнейшего взаимодействия с пиром, и идентификации его в массиве подключений
-      const peerConnections = {...this.state.peerConnections, [socketID]: pc }
-      this.setState({
-        peerConnections //Сохраняем подключение в списке
-      })
-
-
-      //При нахождении кандидата мы будем пересылать его соотвествующему клиенту
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          this.sendToPeer("candidate", e.candidate, {
-            local: this.socket.id, //Для этого мы идентифицируем на сервере своё соединение
-            remote: socketID  //И с помощью полученного socketID идентифицируем клиента, которому необходимо переправить кандидата
-          })
-        }
-      };
-
-/* 
-      //Удаляем из списка стримов отключившиегося пира
-      pc.oniceconnectionstatechange = (e) => {
-        if(pc.iceConnectionState === "disconnected") {
-          const remoteStreams = this.state.remoteStreams.filter(stream => stream.id !== socketID)
-
-          this.setState({
-            remoteStream: remoteStreams.length > 0 && remoteStreams[0].stream || null,
-          })
-        }
-      } */
-
-
-      //При появлении в пире стрима - добавляем стрим в список стримов, для последующего отображения
-      pc.ontrack = (e) => {
-        const remoteVideo = { //Получаем экземпляр стрима
-          id: socketID, //Информация для идентификации стрима 
-          name: socketID,
-          stream: e.streams[0]
-        }
-
-        this.setState(prevState => {
-
-          //В случае если до получения стрима в комнате не было трансляций - мы получаем эту трансляцию на весь экран
-          //Если же в комнате уже есть трансляции - всё остается прежним
-          const remoteStream = prevState.remoteStreams.length > 0 ? {} : { remoteStream: e.streams[0] };
-
-          //Получаем выбранное на данный момент видео
-          let selectedVideo = prevState.remoteStreams.filter(stream => stream.id === prevState.selectedVideo.id);
-
-
-          //Если видео всё ещё имеется - ничего не происходит
-          //В ином случае отображаем на весь экран полученный стрим
-          selectedVideo = selectedVideo.length ? {} : { selectedVideo: remoteVideo};
-
-          return {
-            ...selectedVideo, //Обновляем выбранное видео, если логика выше его получила
-            ...remoteStream,  //Так-же обновляем стрим, он передаётся в компонент который отображает видео на весь экран
-            remoteStreams: [...prevState.remoteStreams, remoteVideo] //Обновляем список стримов, добавляя в него полученный экземпляр
-          };
-        });
-      };
-
-      pc.close = () => {
-
-      }
-
-      if (this.state.localStream)
-      pc.addStream(this.state.localStream) //Добавляем свой в пир свой стрим
-
-      callback(pc) //Возвращаем pc для взаимодействия
-
-    } catch(e) { //Отлавливаем ошибку
-      console.log("Something went wrong! Pc not created", e)
-      callback(null);
-    }
-  }
 
 
   //Функция что выбирает трансляцию для отображения во весь экран
